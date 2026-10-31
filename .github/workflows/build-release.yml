@@ -5,7 +5,7 @@ permissions:
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - 'Makefile'
       - '!**/.github/**'
