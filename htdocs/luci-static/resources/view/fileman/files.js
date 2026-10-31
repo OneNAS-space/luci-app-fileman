@@ -221,27 +221,44 @@ return view.extend({
 			}
 		});
 
-		this.fileInput = E('input', { 'type': 'file', 'multiple': 'multiple', 'class': 'fb-file' });
+		this.upBtn = E('button', {
+			'class': 'cbi-button fb-up',
+			'type': 'button',
+			'title': _('Parent Directory'),
+			'click': ev => {
+				ev.preventDefault();
+				this.navigate(parentPath(this.cwd));
+			}
+		}, [ '\u2191' ]);
+
+		this.fileInput = E('input', {
+			'type': 'file',
+			'multiple': 'multiple',
+			'style': 'display:none',
+			'change': () => this.handleUpload(Array.prototype.slice.call(this.fileInput.files || []))
+		});
+
 		this.uploadStatus = E('span', { 'class': 'fb-upload-status' });
+
 		this.uploadBtn = E('button', {
-			'class': 'cbi-button cbi-button-action',
+			'class': 'cbi-button cbi-button-action fb-upload-btn',
 			'click': ev => {
 				ev.preventDefault();
-				this.handleUpload();
+				this.fileInput.click();
 			}
-		}, [ _('Execute the upload') ]);
+		}, [ _('Upload') ]);
 
-		this.uploadBox = E('div', { 'class': 'fb-upload', 'style': 'display:none' }, [
-			this.fileInput, this.uploadBtn, this.uploadStatus
-		]);
-
-		this.toggleBtn = E('button', {
-			'class': 'cbi-button cbi-button-edit fb-toggle',
-			'click': ev => {
-				ev.preventDefault();
-				this.toggleUpload();
-			}
-		}, [ _('Open Upload') ]);
+		/* drop files anywhere on the list to upload them into the current directory */
+		this.listEl.addEventListener('dragover', ev => {
+			ev.preventDefault();
+			this.listEl.classList.add('is-drop');
+		});
+		this.listEl.addEventListener('dragleave', () => this.listEl.classList.remove('is-drop'));
+		this.listEl.addEventListener('drop', ev => {
+			ev.preventDefault();
+			this.listEl.classList.remove('is-drop');
+			this.handleUpload(Array.prototype.slice.call((ev.dataTransfer && ev.dataTransfer.files) || []));
+		});
 
 		window.addEventListener('popstate', ev => {
 			this.navigate((ev.state && ev.state.path) || '/', { history: false });
@@ -254,17 +271,16 @@ return view.extend({
 		return E([
 			E('link', { 'rel': 'stylesheet', 'href': CSS_URL }),
 			E('h2', {}, [ _('File Manager') ]),
-			E('div', { 'class': 'cbi-map-descr' }, [
-				_('Integrated upload, deletion and installation, non-professionals, please operate carefully.')
-			]),
 			E('div', { 'class': 'cbi-section fb-container' }, [
-				this.pathInput,
+				E('div', { 'class': 'fb-pathbar' }, [ this.upBtn, this.pathInput ]),
 				E('div', { 'class': 'fb-panel' }, [
 					E('div', { 'class': 'fb-title' }, [ _('File List') ]),
-					this.toggleBtn
+					E('div', { 'class': 'fb-tools' }, [ this.uploadStatus, this.uploadBtn, this.fileInput ])
 				]),
-				this.uploadBox,
-				this.listEl
+				this.listEl,
+				E('div', { 'class': 'fb-warning' }, [
+					'\u26A0\uFE0F ' + _('Upload, delete and install act directly on the system. Please be careful.')
+				])
 			])
 		]);
 	},
@@ -280,6 +296,7 @@ return view.extend({
 			this.cwd = path;
 			this.entries = entries;
 			this.pathInput.value = path;
+			this.upBtn.disabled = (path === '/');
 			this.renderList();
 
 			if (opts.history !== false) {
@@ -334,17 +351,6 @@ return view.extend({
 
 		const rows = [];
 
-		if (this.cwd !== '/') {
-			rows.push(E('div', {
-				'class': 'tr fb-row fb-parent cbi-rowstyle-2',
-				'click': () => this.navigate(parentPath(this.cwd))
-			}, [
-				E('div', { 'class': 'td fb-name' }, [
-					E('strong', {}, [ _('.. Return to Parent Directory') ])
-				])
-			]));
-		}
-
 		sorted.forEach((e, i) => rows.push(this.buildRow(e, i, isDirEntry(e))));
 
 		L.dom.content(this.listEl, E('div', { 'class': 'table cbi-section-table' }, rows));
@@ -354,7 +360,7 @@ return view.extend({
 		const full = joinPath(this.cwd, e.name);
 		const isLink = e.type === 'symlink';
 		const isFile = e.type === 'file' || (isLink && e.targetType === 'file');
-		const icon = isLink ? 'link-icon' : (isDir ? 'folder-icon' : 'file-icon');
+		const icon = isLink ? 'is-link' : (isDir ? 'is-dir' : (isFile && this.installerFor(e.name) ? 'is-pkg' : 'is-file'));
 		const label = (isLink && e.target) ? e.name + ' -> ' + e.target : e.name;
 		const clickable = isDir || isFile;
 
@@ -406,11 +412,15 @@ return view.extend({
 		const sizeEl = E('div', { 'class': 'td fb-size' });
 		sizeEl.textContent = (isDir || e.size == null) ? '-' : '%1024.2mB'.format(e.size);
 
+		/* shown instead of the date and size columns when the list is narrow */
+		const subEl = E('div', { 'class': 'fb-sub' });
+		subEl.textContent = dateEl.textContent + ((isDir || e.size == null) ? '' : '  \u00b7  ' + sizeEl.textContent);
+
 		const permEl = E('div', { 'class': 'td fb-perm' });
 		permEl.textContent = modeString(e.type, e.mode);
 
 		return E('div', { 'class': 'tr fb-row cbi-rowstyle-' + (1 + idx % 2) }, [
-			E('div', nameAttrs, [ E('span', { 'class': 'fb-entry ' + icon }, [ nameEl ]) ]),
+			E('div', nameAttrs, [ E('span', { 'class': 'fb-entry ' + icon }, [ nameEl ]), subEl ]),
 			dateEl,
 			sizeEl,
 			permEl,
@@ -590,17 +600,8 @@ return view.extend({
 
 	/* ----- upload ----- */
 
-	toggleUpload() {
-		const hidden = this.uploadBox.style.display === 'none';
-
-		this.uploadBox.style.display = hidden ? 'flex' : 'none';
-		this.toggleBtn.textContent = hidden ? _('Collapse Upload') : _('Open Upload');
-	},
-
-	handleUpload() {
-		const files = Array.prototype.slice.call(this.fileInput.files || []);
-
-		if (!files.length)
+	handleUpload(files) {
+		if (!files || !files.length || this.uploadBtn.disabled)
 			return Promise.resolve();
 
 		const existing = files
@@ -610,7 +611,7 @@ return view.extend({
 		if (!existing.length)
 			return this.uploadFiles(files);
 
-		ui.showModal(_('Execute the upload'), [
+		ui.showModal(_('Upload'), [
 			E('p', {}, [ _('Overwrite existing file(s): %s ?').format(existing.join(', ')) ]),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
@@ -618,7 +619,7 @@ return view.extend({
 				E('button', {
 					'class': 'btn cbi-button cbi-button-positive important',
 					'click': () => this.uploadFiles(files)
-				}, [ _('Execute the upload') ])
+				}, [ _('Upload') ])
 			])
 		]);
 
