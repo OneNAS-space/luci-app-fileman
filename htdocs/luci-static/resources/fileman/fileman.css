@@ -1,0 +1,90 @@
+.fb-container {
+    margin-top: 1rem;
+    padding: 0 15px;
+}
+.fb-container .cbi-button {
+    height: 2.6rem;
+}
+.fb-container .fb-path {
+    margin: 0 0 1rem 0;
+    width: 100%;
+    box-sizing: border-box;
+}
+.fb-container .fb-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #aaa;
+}
+.fb-container .fb-title {
+    font-weight: bold;
+}
+.fb-container .fb-upload {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 1rem 0;
+}
+.fb-container .fb-file {
+    flex-grow: 1;
+    min-width: 12rem;
+}
+.fb-container .fb-list .table {
+    width: 100%;
+    box-sizing: border-box;
+}
+.fb-container .fb-row .td {
+    vertical-align: middle;
+}
+.fb-container .fb-name {
+    text-align: left;
+    word-break: break-all;
+}
+.fb-container .fb-name.is-clickable,
+.fb-container .fb-parent {
+    cursor: pointer;
+}
+.fb-container .fb-parent strong {
+    margin-left: 1rem;
+}
+.fb-container .fb-date,
+.fb-container .fb-size,
+.fb-container .fb-perm {
+    white-space: nowrap;
+}
+.fb-container .fb-actions {
+    text-align: right;
+    white-space: nowrap;
+}
+.fb-container .fb-entry:before {
+    display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
+    content: '';
+    background-size: contain;
+    background-repeat: no-repeat;
+    margin: 0 0.5rem 0 1rem;
+    vertical-align: middle;
+}
+.fb-container .file-icon:before {
+    background-image: url(file-icon.png);
+}
+.fb-container .folder-icon:before {
+    background-image: url(folder-icon.png);
+}
+.fb-container .link-icon:before {
+    background-image: url(link-icon.png);
+}
+.fb-output {
+    max-height: 16rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+@media screen and (max-width: 480px) {
+    .fb-container .fb-date,
+    .fb-container .fb-perm {
+        display: none;
+    }
+}
