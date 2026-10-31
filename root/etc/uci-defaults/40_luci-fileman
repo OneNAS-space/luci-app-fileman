@@ -3,9 +3,9 @@
 # Migrate the old "login info" switch: luci-app-advanced added a line to
 # /etc/profile, this package uses /etc/profile.d/sysinfo.sh instead.
 if grep -Fxq '/etc/sysinfo' /etc/profile 2>/dev/null; then
-        sed -i '\|^/etc/sysinfo$|d' /etc/profile
-        mkdir -p /etc/profile.d
-        printf '# managed by luci-app-fileman\n[ -x /etc/sysinfo ] && /etc/sysinfo\n' > /etc/profile.d/sysinfo.sh
+	sed -i '\|^/etc/sysinfo$|d' /etc/profile
+	mkdir -p /etc/profile.d
+	printf '# managed by luci-app-fileman\n[ -x /etc/sysinfo ] && /etc/sysinfo\n' > /etc/profile.d/sysinfo.sh
 fi
 
 rm -f /tmp/luci-indexcache*
