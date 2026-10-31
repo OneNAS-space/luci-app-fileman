@@ -7,7 +7,7 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/package.mk
 
 PKG_NAME:=luci-app-fileman
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 
 define Package/$(PKG_NAME)
