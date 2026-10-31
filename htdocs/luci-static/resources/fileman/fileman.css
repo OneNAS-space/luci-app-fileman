@@ -72,8 +72,17 @@
 }
 .fb-container .fb-date,
 .fb-container .fb-size,
+.fb-container .fb-kind,
 .fb-container .fb-perm {
     white-space: nowrap;
+}
+/* desktop file-manager look: every header and every column left-aligned, only the buttons sit on the right */
+.fb-container .fb-list .th,
+.fb-container .fb-list .td {
+    text-align: left !important;
+}
+.fb-container .fb-list .td.fb-actions {
+    text-align: right !important;
 }
 .fb-container .fb-perm {
     font-family: Consolas, Monaco, monospace;
@@ -83,6 +92,39 @@
 .fb-container .fb-actions {
     text-align: right;
     white-space: nowrap;
+}
+
+/* sortable header row, like a desktop file manager */
+.fb-container .fb-head .th {
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.fb-container .fb-head .fb-name {
+    word-break: normal;
+    padding-left: 2.5rem;   /* line the label up with the file names, after the icon */
+}
+.fb-container .fb-head .fb-actions {
+    text-align: center !important;
+}
+.fb-container .fb-sort {
+    cursor: pointer;
+    user-select: none;
+}
+.fb-container .fb-sort:hover,
+.fb-container .fb-sort:focus-visible {
+    background: rgba(128, 128, 128, .12);
+    outline: none;
+}
+.fb-container .fb-sort.is-col-target {
+    box-shadow: inset 3px 0 0 rgba(59, 130, 246, .8);
+    background: rgba(59, 130, 246, .10);
+}
+.fb-container .fb-arrow {
+    display: inline-block;
+    margin-left: .35em;
+    font-size: .7em;
+    opacity: .7;
+    vertical-align: middle;
 }
 
 /* entry icons are plain emoji, no image files */
@@ -125,7 +167,8 @@
 }
 @container (max-width: 640px) {
     .fb-container .fb-date,
-    .fb-container .fb-size { display: none; }
+    .fb-container .fb-size,
+    .fb-container .fb-kind { display: none; }
     .fb-container .fb-sub { display: block; }
     .fb-container .fb-actions { white-space: normal; }
     .fb-container .fb-name { min-width: 9rem; }
