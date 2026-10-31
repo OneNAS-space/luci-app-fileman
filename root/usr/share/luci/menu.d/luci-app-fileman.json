@@ -1,0 +1,28 @@
+{
+	"admin/system/fileman": {
+		"title": "File Manager",
+		"order": 60,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-fileman" ]
+		}
+	},
+	"admin/system/fileman/files": {
+		"title": "Files",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "fileman/files"
+		}
+	},
+	"admin/system/fileman/sysinfo": {
+		"title": "Login Info",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "fileman/sysinfo"
+		}
+	}
+}
