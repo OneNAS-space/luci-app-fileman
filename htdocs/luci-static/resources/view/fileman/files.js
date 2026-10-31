@@ -249,15 +249,23 @@ return view.extend({
 		}, [ _('Upload') ]);
 
 		/* drop files anywhere on the list to upload them into the current directory */
+		const hasFiles = ev => !!(ev.dataTransfer && Array.prototype.indexOf.call(ev.dataTransfer.types || [], 'Files') !== -1);
+
 		this.listEl.addEventListener('dragover', ev => {
+			if (!hasFiles(ev))
+				return;
+
 			ev.preventDefault();
 			this.listEl.classList.add('is-drop');
 		});
 		this.listEl.addEventListener('dragleave', () => this.listEl.classList.remove('is-drop'));
 		this.listEl.addEventListener('drop', ev => {
+			if (!hasFiles(ev))
+				return;
+
 			ev.preventDefault();
 			this.listEl.classList.remove('is-drop');
-			this.handleUpload(Array.prototype.slice.call((ev.dataTransfer && ev.dataTransfer.files) || []));
+			this.handleUpload(Array.prototype.slice.call((ev.dataTransfer && ev.dataTransfer.files) || []), true);
 		});
 
 		window.addEventListener('popstate', ev => {
@@ -342,18 +350,203 @@ return view.extend({
 		});
 	},
 
+	sortKey: 'name',
+	sortDir: 1,
+	cols: null,
+	dragCol: null,
+
+	getCols() {
+		if (this.cols)
+			return this.cols;
+
+		const def = [ 'name', 'kind', 'size', 'mtime', 'mode' ];
+		let saved = null;
+
+		try { saved = JSON.parse(window.localStorage.getItem('fileman.cols')); } catch (e) { saved = null; }
+
+		this.cols = (Array.isArray(saved) && saved.length === def.length &&
+			def.every(k => saved.indexOf(k) !== -1) && saved[0] === 'name') ? saved : def;
+
+		return this.cols;
+	},
+
+	moveCol(from, to) {
+		const cols = this.getCols().slice();
+		const i = cols.indexOf(from);
+		const j = cols.indexOf(to);
+
+		/* Name is pinned to the first position */
+		if (i < 1 || j < 1 || i === j)
+			return;
+
+		cols.splice(i, 1);
+		cols.splice(j, 0, from);
+		this.cols = cols;
+
+		try { window.localStorage.setItem('fileman.cols', JSON.stringify(cols)); } catch (e) { /* ignore */ }
+
+		this.renderList();
+	},
+
+	setSort(key) {
+		if (this.sortKey === key) {
+			this.sortDir = -this.sortDir;
+		}
+		else {
+			this.sortKey = key;
+			/* size and date are most useful newest / largest first */
+			this.sortDir = (key === 'mtime' || key === 'size') ? -1 : 1;
+		}
+
+		this.renderList();
+	},
+
+	kindOf(e) {
+		const isLink = e.type === 'symlink';
+
+		if (e.type === 'directory' || (isLink && e.targetType === 'directory'))
+			return isLink ? _('Link to folder') : _('Folder');
+
+		if (isLink)
+			return _('Link');
+
+		if (e.type !== 'file')
+			return _('Special file');
+
+		if (this.installerFor(e.name))
+			return _('Package');
+
+		const m = /\.([A-Za-z0-9_+-]{1,8})$/.exec(e.name);
+
+		return m ? _('%s file').format(m[1].toUpperCase()) : _('File');
+	},
+
+	buildHead() {
+		const labels = {
+			name: [ _('Name'), 'fb-name' ],
+			kind: [ _('Kind'), 'fb-kind' ],
+			size: [ _('Size'), 'fb-size' ],
+			mtime: [ _('Modified'), 'fb-date' ],
+			mode: [ _('Permissions'), 'fb-perm' ]
+		};
+
+		const col = key => {
+			const active = (this.sortKey === key);
+			const th = E('div', {
+				'class': 'th fb-sort ' + labels[key][1] + (active ? ' is-sorted' : ''),
+				'role': 'button',
+				'tabindex': '0',
+				'draggable': key === 'name' ? null : 'true',
+				'title': key === 'name' ? _('Click to sort') : _('Click to sort, drag to move'),
+				'click': () => this.setSort(key),
+				'keydown': ev => {
+					if (ev.key === 'Enter' || ev.key === ' ') {
+						ev.preventDefault();
+						this.setSort(key);
+					}
+				},
+				'dragstart': ev => {
+					if (key === 'name') {
+						ev.preventDefault();
+						return;
+					}
+
+					this.dragCol = key;
+					ev.dataTransfer.effectAllowed = 'move';
+					ev.dataTransfer.setData('text/plain', key);
+				},
+				'dragend': () => {
+					this.dragCol = null;
+					Array.prototype.forEach.call(this.listEl.querySelectorAll('.is-col-target'),
+						n => n.classList.remove('is-col-target'));
+				},
+				'dragover': ev => {
+					if (!this.dragCol || this.dragCol === key || key === 'name')
+						return;
+
+					ev.preventDefault();
+					th.classList.add('is-col-target');
+				},
+				'dragleave': () => th.classList.remove('is-col-target'),
+				'drop': ev => {
+					if (!this.dragCol || key === 'name')
+						return;
+
+					ev.preventDefault();
+					this.moveCol(this.dragCol, key);
+				}
+			}, [ labels[key][0] ]);
+
+			if (active)
+				th.appendChild(E('span', { 'class': 'fb-arrow' }, [ this.sortDir > 0 ? '\u25B2' : '\u25BC' ]));
+
+			return th;
+		};
+
+		return E('div', { 'class': 'tr table-titles fb-head' },
+			this.getCols().map(col).concat([ E('div', { 'class': 'th fb-actions' }, [ _('Action') ]) ]));
+	},
+
 	renderList() {
 		const isDirEntry = e => e.type === 'directory' ||
 			(e.type === 'symlink' && e.targetType === 'directory');
 
-		const sorted = this.entries.slice().sort((a, b) =>
-			(isDirEntry(b) - isDirEntry(a)) || a.name.localeCompare(b.name));
+		const key = this.sortKey;
+		const dir = this.sortDir;
+		const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
 
-		const rows = [];
+		/* folders stay on top when sorting by name or kind */
+		/* entries shown as "-" have no size at all: they rank below a real 0 B file */
+		const sizeVal = e => (isDirEntry(e) || e.size == null) ? -1 : e.size;
+
+		const pinDirs = (key === 'name' || key === 'kind');
+
+		const sorted = this.entries.slice().sort((a, b) => {
+			if (pinDirs) {
+				const grp = isDirEntry(b) - isDirEntry(a);
+
+				if (grp)
+					return grp;
+			}
+
+			let r = 0;
+
+			if (key === 'mtime')
+				r = (a.mtime || 0) - (b.mtime || 0);
+			else if (key === 'size')
+				r = sizeVal(a) - sizeVal(b);
+			else if (key === 'kind')
+				r = this.kindOf(a).localeCompare(this.kindOf(b));
+			else if (key === 'mode')
+				r = ((a.mode || 0) & 0o777) - ((b.mode || 0) & 0o777);
+			else
+				r = byName(a, b);
+
+			return r ? r * dir : byName(a, b);
+		});
+
+		const rows = [ this.buildHead() ];
 
 		sorted.forEach((e, i) => rows.push(this.buildRow(e, i, isDirEntry(e))));
 
 		L.dom.content(this.listEl, E('div', { 'class': 'table cbi-section-table' }, rows));
+	},
+
+	handleDownload(full, name) {
+		ui.showModal(_('Download'), [
+			E('p', {}, [ _('Do u want to download %s ?').format(name) ]),
+			E('div', { 'class': 'right' }, [
+				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
+				' ',
+				E('button', {
+					'class': 'btn cbi-button cbi-button-positive important',
+					'click': () => {
+						ui.hideModal();
+						downloadFile(full, name);
+					}
+				}, [ _('Download') ])
+			])
+		]);
 	},
 
 	buildRow(e, idx, isDir) {
@@ -371,7 +564,7 @@ return view.extend({
 				if (isDir)
 					this.navigate(full);
 				else
-					downloadFile(full, e.name);
+					this.handleDownload(full, e.name);
 			};
 		}
 
@@ -416,16 +609,22 @@ return view.extend({
 		const subEl = E('div', { 'class': 'fb-sub' });
 		subEl.textContent = dateEl.textContent + ((isDir || e.size == null) ? '' : '  \u00b7  ' + sizeEl.textContent);
 
+		const kindEl = E('div', { 'class': 'td fb-kind' });
+		kindEl.textContent = this.kindOf(e);
+
 		const permEl = E('div', { 'class': 'td fb-perm' });
 		permEl.textContent = modeString(e.type, e.mode);
 
-		return E('div', { 'class': 'tr fb-row cbi-rowstyle-' + (1 + idx % 2) }, [
-			E('div', nameAttrs, [ E('span', { 'class': 'fb-entry ' + icon }, [ nameEl ]), subEl ]),
-			dateEl,
-			sizeEl,
-			permEl,
-			E('div', { 'class': 'td fb-actions' }, actions)
-		]);
+		const cells = {
+			name: E('div', nameAttrs, [ E('span', { 'class': 'fb-entry ' + icon }, [ nameEl ]), subEl ]),
+			kind: kindEl,
+			size: sizeEl,
+			mtime: dateEl,
+			mode: permEl
+		};
+
+		return E('div', { 'class': 'tr fb-row cbi-rowstyle-' + (1 + idx % 2) },
+			this.getCols().map(k => cells[k]).concat([ E('div', { 'class': 'td fb-actions' }, actions) ]));
 	},
 
 	/* ----- package installation ----- */
@@ -600,7 +799,7 @@ return view.extend({
 
 	/* ----- upload ----- */
 
-	handleUpload(files) {
+	handleUpload(files, confirm) {
 		if (!files || !files.length || this.uploadBtn.disabled)
 			return Promise.resolve();
 
@@ -608,11 +807,16 @@ return view.extend({
 			.filter(f => this.entries.some(e => e.name === f.name))
 			.map(f => f.name);
 
-		if (!existing.length)
+		/* files picked with the Upload button were chosen on purpose; dropped files always ask first */
+		if (!existing.length && !confirm)
 			return this.uploadFiles(files);
 
+		const names = files.map(f => f.name).join(', ');
+
 		ui.showModal(_('Upload'), [
-			E('p', {}, [ _('Overwrite existing file(s): %s ?').format(existing.join(', ')) ]),
+			E('p', {}, [ existing.length
+				? _('Overwrite existing file(s): %s ?').format(existing.join(', '))
+				: _('Do u want to upload %s to %s ?').format(names, this.cwd) ]),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
 				' ',
