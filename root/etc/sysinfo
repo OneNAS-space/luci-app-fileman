@@ -1,0 +1,108 @@
+#!/bin/ash
+
+get_l3_device() {
+    local logical_if="$1"
+    local l3_dev
+    l3_dev=$(ubus call network.interface."$logical_if" status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)
+    [ -z "$l3_dev" ] && l3_dev=$(uci get network."$logical_if".device 2>/dev/null)
+    [ -z "$l3_dev" ] && l3_dev="$logical_if"
+    echo -n "$l3_dev"
+}
+
+get_ip_addr() {
+    local iface="$1"
+    local ip_version="$2"
+    local version_name
+    [ "$ip_version" = "4" ] && version_name="IPv4"
+    [ "$ip_version" = "6" ] && version_name="IPv6"
+
+    ip -"$ip_version" addr show dev "$iface" 2>/dev/null | awk -v v="$version_name" '/inet[6]? / { 
+        ip = $2
+        sub(/\/[0-9]+/, "", ip)
+        print v "," $NF "," ip
+    }'
+}
+
+CURRENT_DATETIME=$(date +"%a %b %d %H:%M:%S %Y")
+LOADAVG=$(top -bn1 | grep "^Load average:" | sed 's/Load average: //')
+CPU_INFO=$(top -bn1 | grep "^CPU:" | sed 's/^CPU:[[:space:]]*//')
+ROOT_USAGE=$(df -h / | awk 'NR==2 {print $5 " of " $2}')
+MEM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
+MEM_USED=$(free -m | awk '/Mem:/ {print $3}')
+MEM_PCT=$([ "$MEM_TOTAL" -ne 0 ] && echo $((MEM_USED * 100 / MEM_TOTAL)) || echo 0)
+PROCESSES=$(($(ps | wc -l) - 1))
+
+get_zone_info() {
+    local zone_name="$1"
+    local label="$2"
+    local zone_section LOGICAL_IFS DEVICE_LIST=""
+    local info_output=""
+
+    zone_section=$(uci show firewall 2>/dev/null | awk "/\.name='$zone_name'$/ {print \$1}")
+    [ -n "$zone_section" ] && LOGICAL_IFS=$(uci get "${zone_section%.name=\'$zone_name\'}".network 2>/dev/null | xargs)
+    if [ -z "$LOGICAL_IFS" ]; then
+        if ubus call network.interface."$zone_name" status >/dev/null 2>&1 || uci get network."$zone_name" >/dev/null 2>&1; then
+            LOGICAL_IFS="$zone_name"
+        else
+            if [ "$zone_name" = "wan" ]; then
+                echo -ne " ${label} Status: Bypass Gateway/Bridge Device (No WAN Interface)"
+            fi
+            return 0
+        fi
+    fi
+
+    info_output=" ${label} Interfaces List (Original): $LOGICAL_IFS"
+
+    for iface_logical in $LOGICAL_IFS; do
+        local dev=$(get_l3_device "$iface_logical")
+        if ! echo "$DEVICE_LIST" | grep -qw "$dev"; then
+            DEVICE_LIST="$DEVICE_LIST $dev"
+            while IFS=, read -r IP_VERSION FULL_IFACE_NAME IP_ADDR; do
+                [ -n "$IP_ADDR" ] && info_output="${info_output}\n   ${IP_VERSION} for $FULL_IFACE_NAME: $IP_ADDR"
+            done <<- EOF
+$(get_ip_addr "$dev" 4)
+$(get_ip_addr "$dev" 6)
+EOF
+        fi
+    done
+    echo -ne "$info_output"
+}
+
+get_wifi_info() {
+    local WIFI_INTERFACES_RAW=$(ip link show | awk '/phy[0-9]-ap[0-9]:/ { gsub(/:/, "", $2); print $2 }')
+    local WIFI_DISPLAY=$(echo "$WIFI_INTERFACES_RAW" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+    [ -n "$WIFI_DISPLAY" ] && echo -n " WIFI Interfaces List (Original): $WIFI_DISPLAY"
+}
+
+LAST_LOG=$(logread | grep "Password auth succeeded" | tail -n 2 | head -n 1)
+LAST_LOGIN_STR=$([ -n "$LAST_LOG" ] && echo "$LAST_LOG" | awk '{sub(/:[0-9]+$/, "", $NF); print $1, $2, $3, $4, $5, "from", $NF}' || echo "First login or no records")
+
+echo " System information as of $CURRENT_DATETIME"
+echo ""
+echo " System load:      $LOADAVG"
+echo " CPU usage:        $CPU_INFO"
+echo " Disk usage:       $ROOT_USAGE"
+echo " Memory usage:     ${MEM_PCT}%"
+echo " Processes:        $PROCESSES"
+
+WAN_OUT=$(get_zone_info "wan" "WAN")
+if [ -n "$WAN_OUT" ]; then
+    echo ""
+    echo -e "$WAN_OUT"
+fi
+
+LAN_OUT=$(get_zone_info "lan" "LAN")
+if [ -n "$LAN_OUT" ]; then
+    echo ""
+    echo -e "$LAN_OUT"
+fi
+
+WIFI_OUT=$(get_wifi_info)
+if [ -n "$WIFI_OUT" ]; then
+    echo ""
+    echo -e "$WIFI_OUT"
+fi
+
+echo ""
+echo " Last login: $LAST_LOGIN_STR"
+echo ""
