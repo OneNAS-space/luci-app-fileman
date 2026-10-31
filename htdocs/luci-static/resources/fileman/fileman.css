@@ -1,34 +1,59 @@
 .fb-container {
     margin-top: 1rem;
     padding: 0 15px;
+    container-type: inline-size;   /* responsive rules below follow the real content width, not the window */
 }
 .fb-container .cbi-button {
-    height: 2.6rem;
+    height: 2.4rem;
+}
+.fb-container .fb-pathbar {
+    display: flex;
+    gap: .5rem;
+    margin-bottom: 1rem;
+}
+.fb-container .fb-up {
+    min-width: 2.6rem;
+    font-weight: bold;
 }
 .fb-container .fb-path {
-    margin: 0 0 1rem 0;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
     box-sizing: border-box;
+    font-family: Consolas, Monaco, monospace;
 }
 .fb-container .fb-panel {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: .5rem 1rem;
     padding-bottom: 1rem;
-    border-bottom: 1px solid #aaa;
+    border-bottom: 1px solid rgba(128, 128, 128, .35);
 }
 .fb-container .fb-title {
     font-weight: bold;
 }
-.fb-container .fb-upload {
-    flex-wrap: wrap;
+.fb-container .fb-tools {
+    display: flex;
     align-items: center;
-    gap: 0.5rem;
-    margin: 1rem 0;
+    gap: .75rem;
 }
-.fb-container .fb-file {
-    flex-grow: 1;
-    min-width: 12rem;
+.fb-container .fb-upload-status {
+    opacity: .7;
+    font-size: .9em;
+    word-break: break-all;
+}
+.fb-container .fb-list {
+    margin-top: .5rem;
+    overflow-x: auto;
+    border: 2px dashed transparent;
+    border-radius: .5rem;
+    transition: border-color .15s, background .15s;
+}
+.fb-container .fb-list.is-drop {
+    border-color: rgba(59, 130, 246, .7);
+    background: rgba(59, 130, 246, .06);
 }
 .fb-container .fb-list .table {
     width: 100%;
@@ -40,51 +65,68 @@
 .fb-container .fb-name {
     text-align: left;
     word-break: break-all;
+    min-width: 14rem;   /* never let the name column be squeezed by the others */
 }
-.fb-container .fb-name.is-clickable,
-.fb-container .fb-parent {
+.fb-container .fb-name.is-clickable {
     cursor: pointer;
-}
-.fb-container .fb-parent strong {
-    margin-left: 1rem;
 }
 .fb-container .fb-date,
 .fb-container .fb-size,
 .fb-container .fb-perm {
     white-space: nowrap;
 }
+.fb-container .fb-perm {
+    font-family: Consolas, Monaco, monospace;
+    font-size: .9em;
+    opacity: .75;
+}
 .fb-container .fb-actions {
     text-align: right;
     white-space: nowrap;
 }
+
+/* entry icons are plain emoji, no image files */
 .fb-container .fb-entry:before {
     display: inline-block;
-    width: 1.5rem;
-    height: 1.5rem;
-    content: '';
-    background-size: contain;
-    background-repeat: no-repeat;
-    margin: 0 0.5rem 0 1rem;
+    width: 1.6em;
+    margin: 0 .4rem 0 .5rem;
+    text-align: center;
+    font-style: normal;
     vertical-align: middle;
 }
-.fb-container .file-icon:before {
-    background-image: url(file-icon.png);
+.fb-container .is-dir:before  { content: "\1F4C1"; }
+.fb-container .is-file:before { content: "\1F4C4"; }
+.fb-container .is-link:before { content: "\1F517"; }
+.fb-container .is-pkg:before  { content: "\1F4E6"; }
+
+.fb-container .fb-sub {
+    display: none;
+    margin: .15rem 0 0 2.5rem;
+    font-size: .8em;
+    opacity: .65;
+    word-break: normal;
 }
-.fb-container .folder-icon:before {
-    background-image: url(folder-icon.png);
+
+.fb-container .fb-warning {
+    margin: 1rem 0 .5rem;
+    font-size: .8em;
+    color: #e5484d;
 }
-.fb-container .link-icon:before {
-    background-image: url(link-icon.png);
-}
+
 .fb-output {
     max-height: 16rem;
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-all;
 }
-@media screen and (max-width: 480px) {
+/* narrow content area: drop the least useful columns first, then let the buttons wrap */
+@container (max-width: 820px) {
+    .fb-container .fb-perm { display: none; }
+}
+@container (max-width: 640px) {
     .fb-container .fb-date,
-    .fb-container .fb-perm {
-        display: none;
-    }
+    .fb-container .fb-size { display: none; }
+    .fb-container .fb-sub { display: block; }
+    .fb-container .fb-actions { white-space: normal; }
+    .fb-container .fb-name { min-width: 9rem; }
 }
