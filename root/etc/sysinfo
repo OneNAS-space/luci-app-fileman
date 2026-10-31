@@ -68,14 +68,59 @@ EOF
     echo -ne "$info_output"
 }
 
-get_wifi_info() {
-    local WIFI_INTERFACES_RAW=$(ip link show | awk '/phy[0-9]-ap[0-9]:/ { gsub(/:/, "", $2); print $2 }')
-    local WIFI_DISPLAY=$(echo "$WIFI_INTERFACES_RAW" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-    [ -n "$WIFI_DISPLAY" ] && echo -n " WIFI Interfaces List (Original): $WIFI_DISPLAY"
+# number of associated stations on one AP interface; prefers hostapd (exact per BSS),
+# falls back to iw, then iwinfo
+wifi_client_count() {
+    local n="$1" c
+    if ubus list "hostapd.$n" >/dev/null 2>&1; then
+        c=$(ubus call "hostapd.$n" get_clients 2>/dev/null | grep -cE '^[[:space:]]*"([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}": \{')
+    elif command -v iw >/dev/null 2>&1; then
+        c=$(iw dev "$n" station dump 2>/dev/null | grep -c '^Station')
+    elif command -v iwinfo >/dev/null 2>&1; then
+        c=$(iwinfo "$n" assoclist 2>/dev/null | grep -cE '^([0-9A-Fa-f]{2}:){5}')
+    else
+        echo "?"
+        return
+    fi
+    echo "${c:-0}"
 }
 
-LAST_LOG=$(logread | grep "Password auth succeeded" | tail -n 2 | head -n 1)
-LAST_LOGIN_STR=$([ -n "$LAST_LOG" ] && echo "$LAST_LOG" | awk '{sub(/:[0-9]+$/, "", $NF); print $1, $2, $3, $4, $5, "from", $NF}' || echo "First login or no records")
+get_wifi_info() {
+    # Any wireless netdev (mac80211 creates /sys/class/net/<if>/phy80211), so names like
+    # phy0-ap0, wl0.1-ap0 (multi-band / MLO phys) or wlan0 are all found.
+    # type 1 = ethernet-like; this skips monitor interfaces (type 803).
+    local d name list="" lines="" c total=0
+    for d in /sys/class/net/*/phy80211; do
+        [ -e "$d" ] || continue
+        name=${d%/phy80211}
+        name=${name##*/}
+        [ "$(cat "/sys/class/net/$name/type" 2>/dev/null)" = "1" ] || continue
+        list="$list $name"
+        c=$(wifi_client_count "$name")
+        lines="${lines}\n   Clients on $name: $c"
+        case "$c" in *[!0-9]*) ;; *) total=$((total + c)) ;; esac
+    done
+    list=${list# }
+    [ -n "$list" ] && echo -n " WIFI Interfaces List (Original): ${list}${lines}\n   Clients total: $total"
+}
+
+# Last SSH login from the dropbear entries in the system log. Matches password AND
+# public-key logins ("... auth succeeded for 'root' ... from IP:port").
+# Run from a terminal at login, the newest entry is the current session, so take the
+# one before it; run from elsewhere (e.g. the LuCI page) the newest entry is the answer.
+LOGIN_LINES=$(logread 2>/dev/null | grep -i 'dropbear.*auth succeeded')
+if [ -t 0 ]; then
+    LAST_LOG=$(echo "$LOGIN_LINES" | tail -n 2 | head -n 1)
+    [ "$(echo "$LOGIN_LINES" | grep -c .)" -lt 2 ] && LAST_LOG=""
+else
+    LAST_LOG=$(echo "$LOGIN_LINES" | tail -n 1)
+fi
+if [ -n "$LAST_LOG" ]; then
+    LAST_USER=$(echo "$LAST_LOG" | sed -n "s/.* for '\([^']*\)'.*/\1/p")
+    LAST_LOGIN_STR=$(echo "$LAST_LOG" | awk -v u="${LAST_USER:-unknown}" '{sub(/:[0-9]+$/, "", $NF); print $1, $2, $3, $4, $5, "as", u, "from", $NF}')
+else
+    LAST_LOGIN_STR="First login or no records"
+fi
 
 echo " System information as of $CURRENT_DATETIME"
 echo ""
