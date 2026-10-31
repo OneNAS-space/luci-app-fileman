@@ -1,0 +1,35 @@
+{
+	"luci-app-fileman": {
+		"description": "Grant access to File Manager",
+		"read": {
+			"cgi-io": [ "download" ],
+			"file": {
+				"/": [ "list" ],
+				"/*": [ "list", "read" ],
+				"/**": [ "list", "read" ],
+				"/etc/sysinfo": [ "exec" ],
+				"/usr/bin/readlink": [ "exec" ],
+				"/bin/readlink": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "list", "stat", "read", "exec" ]
+			}
+		},
+		"write": {
+			"cgi-io": [ "upload" ],
+			"file": {
+				"/*": [ "write" ],
+				"/**": [ "write" ],
+				"/bin/rm": [ "exec" ],
+				"/bin/mv": [ "exec" ],
+				"/usr/bin/apk": [ "exec" ],
+				"/sbin/apk": [ "exec" ],
+				"/bin/opkg": [ "exec" ],
+				"/usr/bin/opkg": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "write", "remove", "exec" ]
+			}
+		}
+	}
+}
