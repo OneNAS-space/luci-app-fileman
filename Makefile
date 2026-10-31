@@ -1,6 +1,6 @@
 # Copyright (C) 2025  OneNAS-space <https://github.com/OneNAS-space/luci-app-fileman/>
 #
-# This is free software, licensed under the MIT License
+# This is free software, licensed under the GPL-3 License
 #
 
 include $(TOPDIR)/rules.mk
