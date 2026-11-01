@@ -54,7 +54,7 @@ function span(cls, text) {
 	return n;
 }
 
-/* colourise the raw text: banner, separators, "key: value" lines and section headings */
+/* colourise the raw text (a colon only ends the key when whitespace follows it, so labels such as "br-lan:vip" stay in the key): banner, separators, "key: value" lines and section headings */
 function renderLines(banner, stats) {
 	const out = [];
 
@@ -69,7 +69,7 @@ function renderLines(banner, stats) {
 			out.push(span('si-dim', l + '\n'));
 		else if ((m = l.match(/^(\s*)((?:WAN|LAN|WIFI) Interfaces List[^:]*):(.*)$/)))
 			out.push(E('span', {}, [ m[1], span('si-head2', m[2] + ':'), span('si-val', m[3] + '\n') ]));
-		else if ((m = l.match(/^(\s*)([^:]{1,40}):(\s+.*)$/)))
+		else if ((m = l.match(/^(\s*)((?:[^:]|:(?!\s)){1,40}):(\s+.*)$/)))
 			out.push(E('span', {}, [ m[1], span('si-key', m[2] + ':'), span('si-val', m[3] + '\n') ]));
 		else
 			out.push(span('si-val', l + '\n'));
