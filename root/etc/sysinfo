@@ -85,23 +85,64 @@ wifi_client_count() {
     echo "${c:-0}"
 }
 
+# "ap" for an access point interface, "sta" for a client (uplink / bridge) interface
+wifi_mode() {
+    local n="$1" t
+    if ubus list "hostapd.$n" >/dev/null 2>&1; then
+        echo ap
+        return
+    fi
+    if command -v iw >/dev/null 2>&1; then
+        t=$(iw dev "$n" info 2>/dev/null | awk '$1 == "type" {print $2; exit}')
+    elif command -v iwinfo >/dev/null 2>&1; then
+        t=$(iwinfo "$n" info 2>/dev/null | awk '/Mode:/ {print $0; exit}')
+    fi
+    case "$t" in
+        managed|*Client*) echo sta ;;
+        *) echo ap ;;
+    esac
+}
+
+# SSID an uplink interface is connected to (empty when not associated)
+wifi_uplink_ssid() {
+    local n="$1" s=""
+    if command -v iw >/dev/null 2>&1; then
+        s=$(iw dev "$n" link 2>/dev/null | sed -n 's/^[[:space:]]*SSID: //p' | head -n1)
+    fi
+    if [ -z "$s" ] && command -v iwinfo >/dev/null 2>&1; then
+        s=$(iwinfo "$n" info 2>/dev/null | sed -n 's/.*ESSID: "\(.*\)".*/\1/p' | head -n1)
+    fi
+    echo "$s"
+}
+
 get_wifi_info() {
     # Any wireless netdev (mac80211 creates /sys/class/net/<if>/phy80211), so names like
     # phy0-ap0, wl0.1-ap0 (multi-band / MLO phys) or wlan0 are all found.
     # type 1 = ethernet-like; this skips monitor interfaces (type 803).
-    local d name list="" lines="" c total=0
+    # Access points report their associated clients. Client-mode interfaces (a bridged / relayed
+    # uplink) have no clients of their own, so they show what they are connected to and their address.
+    local d name list="" lines="" c total=0 aps=0 ssid ips
     for d in /sys/class/net/*/phy80211; do
         [ -e "$d" ] || continue
         name=${d%/phy80211}
         name=${name##*/}
         [ "$(cat "/sys/class/net/$name/type" 2>/dev/null)" = "1" ] || continue
         list="$list $name"
+        if [ "$(wifi_mode "$name")" = "sta" ]; then
+            ssid=$(wifi_uplink_ssid "$name")
+            ips=$( { get_ip_addr "$name" 4; get_ip_addr "$name" 6 | grep -v ',fe80:'; } | awk -F, '{printf "%s%s %s", (n++ ? ", " : ""), $1, $3}')
+            lines="${lines}\n   Uplink on $name: ${ssid:-not connected}${ips:+, $ips}"
+            continue
+        fi
+        aps=$((aps + 1))
         c=$(wifi_client_count "$name")
         lines="${lines}\n   Clients on $name: $c"
         case "$c" in *[!0-9]*) ;; *) total=$((total + c)) ;; esac
     done
     list=${list# }
-    [ -n "$list" ] && echo -n " WIFI Interfaces List (Original): ${list}${lines}\n   Clients total: $total"
+    # the total only makes sense when there is at least one access point (0 clients is then a real answer)
+    [ "$aps" -gt 0 ] && lines="${lines}\n   Clients total: $total"
+    [ -n "$list" ] && echo -n " WIFI Interfaces List (Original): ${list}${lines}"
 }
 
 # Last SSH login from the dropbear entries in the system log. Matches password AND
