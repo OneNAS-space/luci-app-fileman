@@ -7,19 +7,35 @@ no translations shipped (strings are wrapped in `_()` if you want to add your ow
 
 ### System → File Manager → Files
 
-- Browse the file system with a path bar (type a path, or use the **↑** button for the parent directory).
-  The current directory is kept in the URL, so browser back / forward and reloads work.
-- Desktop-style list: **Name / Kind / Size / Modified / Permissions / Action**.
+- Finder-style browsing, one list and no permanent tree:
+  - The path bar is a **breadcrumb**: the first step is the router's host name, then one button per folder
+    (`SBE1V1K › tmp › etc › passwall2`). Click any step to go there; click the empty space (or double-click) to type a path instead.
+  - **Back / forward arrows** step through the folders visited. The current directory is kept in the URL, so browser
+    back / forward and reloads work too.
+  - Folders open **in place** with the small triangle in front of the name: the content appears indented below the folder,
+    to any depth. What is open is remembered while you move around. Click the name (or double-click the row) to enter a folder.
+- Desktop-style list: **Name / Kind / Size / Modified / Permissions / Owner/Group**. Rows highlight under the pointer.
   - Click a column header to sort (click again to reverse). Folders stay on top when sorting by name or kind;
     entries without a size (`-`) rank below real 0 B files when sorting by size.
-  - Drag a header to reorder the columns (Name stays first, Action stays last). The order is remembered in the browser.
+  - Drag a header to reorder the columns (Name stays first). The order is remembered in the browser.
   - Kind shows Folder, Link, Package (installable `.apk` / `.ipk`) or the file extension.
-- **Upload** with the button or by dropping files onto the list (multiple files, progress shown).
-  Dropped files ask for confirmation first; existing files ask before they are overwritten.
+  - Owner/Group is shown as names (`root:root`) looked up in `/etc/passwd` and `/etc/group`, numbers when there is no name.
+- **Right-click menu** on a row (or the menu key / Shift+F10): **Rename**, **Delete**, **Install** for packages,
+  **Upload** for folders. With a mouse the Action column is not needed and is hidden; on touch screens and narrow pages
+  (a phone held upright) the plain list with the Action column is kept.
+- The **...** button next to the path bar: **New Folder** (in the current folder) and **Upload File**.
+- **Upload** from the **...** menu, from a folder's right-click menu, or by dropping files onto the list
+  (onto a folder row to upload into that folder). Multiple files, progress shown. Every upload asks for a final
+  confirmation, and existing files are called out before they are overwritten.
 - **Download** a file by clicking its name (asks first), **Rename**, **Delete** (asks first; directories are removed recursively).
 - **Install** `.apk` (apk-based OpenWrt) or `.ipk` (opkg-based) packages, with the package manager's output shown.
+- **File Manager's own files are protected**: its views, stylesheet, menu entry and access rules, and the folders that
+  hold them, cannot be deleted, renamed or overwritten here (symlinks into them included), so one click cannot break the page.
+  This is a safety net for the interface, not a security boundary: the access rules still grant write access to the
+  whole file system.
 - Emoji icons instead of image files, symlinks show their target, responsive layout that follows the real content width
-  (works with sidebar themes such as Argon): less important columns drop out as the page gets narrower, no horizontal scrolling.
+  (works with sidebar themes such as Argon and Bootstrap): less important columns drop out as the page gets narrower,
+  no horizontal scrolling.
 
 ### System → File Manager → Login Info
 
