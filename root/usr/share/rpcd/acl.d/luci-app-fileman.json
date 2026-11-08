@@ -22,6 +22,7 @@
 				"/**": [ "write" ],
 				"/bin/rm": [ "exec" ],
 				"/bin/mv": [ "exec" ],
+				"/bin/mkdir": [ "exec" ],
 				"/usr/bin/apk": [ "exec" ],
 				"/sbin/apk": [ "exec" ],
 				"/bin/opkg": [ "exec" ],
