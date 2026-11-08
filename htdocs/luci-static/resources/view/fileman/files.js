@@ -9,7 +9,7 @@
  *
  * Browse, upload, download, rename, delete and install packages (apk / ipk).
  * Everything goes through rpcd's "file" plugin and cgi-io, authorised by
- * /usr/share/rpcd/acl.d/luci-app-advanced.json. No shell command lines are
+ * /usr/share/rpcd/acl.d/luci-app-fileman.json. No shell command lines are
  * built from user input: commands are executed with an argument array.
  *
  * NOTE: LuCI's E() treats a single non-array string child as HTML. Anything
@@ -43,6 +43,36 @@ function joinPath(dir, name) {
 
 function parentPath(p) {
 	return normalizePath(p + '/..');
+}
+
+/* ---------- File Manager's own files ---------- */
+
+/*
+ * Deleting, renaming or overwriting these from inside File Manager would saw
+ * off the branch it sits on (no page, no menu entry, or no permission left to
+ * repair anything). Installing a new version of the package is not affected.
+ */
+const OWN_DIRS = [
+	'/www/luci-static/resources/view/fileman',
+	'/www/luci-static/resources/fileman'
+];
+
+const OWN_FILES = [
+	'/usr/share/luci/menu.d/luci-app-fileman.json',
+	'/usr/share/rpcd/acl.d/luci-app-fileman.json'
+];
+
+/* one of our files, or anything inside one of our folders */
+function isOwnPath(p) {
+	return OWN_FILES.indexOf(p) !== -1 ||
+		OWN_DIRS.some(d => p === d || p.indexOf(d + '/') === 0);
+}
+
+/* a folder that holds our files (/www, /usr, ...): removing or renaming it takes them along */
+function holdsOwnPath(p) {
+	const prefix = (p === '/') ? '/' : p + '/';
+
+	return OWN_FILES.concat(OWN_DIRS).some(x => x.indexOf(prefix) === 0);
 }
 
 /* ---------- formatting helpers ---------- */
@@ -81,6 +111,11 @@ function showError(msg) {
 	ui.addNotification(null, E('p', {}, [ String(msg) ]), 'danger');
 }
 
+/* a folder, or a link that points to one: both can be opened and expanded */
+function isDirEntry(e) {
+	return e.type === 'directory' || (e.type === 'symlink' && e.targetType === 'directory');
+}
+
 /* ---------- rpc helpers ---------- */
 
 function checkExec(res) {
@@ -92,6 +127,15 @@ function checkExec(res) {
 
 function readlink(path) {
 	return fs.exec('/usr/bin/readlink', [ path ]).catch(() => fs.exec('/bin/readlink', [ path ]));
+}
+
+/* the folder with every symlink resolved: a link to one of our folders must not be a way around the lock */
+function realDir(path) {
+	const run = bin => fs.exec(bin, [ '-f', path ]);
+
+	return run('/usr/bin/readlink').catch(() => run('/bin/readlink')).then(
+		r => normalizePath((r && r.code === 0 && String(r.stdout || '').trim()) || path),
+		() => path);
 }
 
 function resolveLink(full) {
@@ -193,7 +237,16 @@ function uploadOne(destPath, file, onProgress) {
 return view.extend({
 	pm: null,
 	cwd: null,
+	hostname: null,
+	histIdx: 0,
+	histMax: 0,
+	realCwd: null,
+	uploadDir: null,
 	entries: [],
+
+	/* tree view: the folders opened below the current one, and what they hold */
+	expanded: {},
+	subdirs: {},
 
 	load() {
 		return detectPkgManager();
@@ -213,64 +266,181 @@ return view.extend({
 				if (ev.key === 'Enter') {
 					ev.preventDefault();
 					this.navigate(ev.target.value);
+					this.editPath(false);
+				}
+				else if (ev.key === 'Escape') {
+					ev.preventDefault();
+					ev.target.value = this.cwd || '/';
+					this.editPath(false);
 				}
 			},
 			'blur': ev => {
 				if (normalizePath(ev.target.value) !== this.cwd)
 					this.navigate(ev.target.value);
+				this.editPath(false);
 			}
 		});
 
-		this.upBtn = E('button', {
-			'class': 'cbi-button fb-up',
+		/* Finder-style path bar: every folder on the way is a button, the empty
+		 * space (or a double click) turns it into a text box for typing a path */
+		this.crumbEl = E('div', {
+			'class': 'fb-crumbs',
+			'title': _('Click an empty area to type a path'),
+			'click': ev => {
+				if (ev.target === this.crumbEl || ev.target.classList.contains('fb-crumb-fill'))
+					this.editPath(true);
+			},
+			'dblclick': () => this.editPath(true)
+		});
+
+		this.pathWrap = E('div', { 'class': 'fb-pathwrap' }, [ this.crumbEl, this.pathInput ]);
+
+		/* back / forward through the folders visited, like Finder's two arrows */
+		this.backBtn = E('button', {
+			'class': 'cbi-button fb-nav fb-back',
 			'type': 'button',
-			'title': _('Parent Directory'),
+			'title': _('Back'),
+			'aria-label': _('Back'),
+			'disabled': 'disabled',
 			'click': ev => {
 				ev.preventDefault();
-				this.navigate(parentPath(this.cwd));
+				if (this.histIdx > 0)
+					window.history.back();
 			}
-		}, [ '\u2191' ]);
+		}, [ E('span', { 'class': 'fb-chevron', 'aria-hidden': 'true' }) ]);
+
+		this.fwdBtn = E('button', {
+			'class': 'cbi-button fb-nav fb-fwd',
+			'type': 'button',
+			'title': _('Forward'),
+			'aria-label': _('Forward'),
+			'disabled': 'disabled',
+			'click': ev => {
+				ev.preventDefault();
+				if (this.histIdx < this.histMax)
+					window.history.forward();
+			}
+		}, [ E('span', { 'class': 'fb-chevron', 'aria-hidden': 'true' }) ]);
 
 		this.fileInput = E('input', {
 			'type': 'file',
 			'multiple': 'multiple',
 			'style': 'display:none',
-			'change': () => this.handleUpload(Array.prototype.slice.call(this.fileInput.files || []))
+			'change': () => {
+				/* the folder the picker was opened for (right-click menu), or the current one */
+				const dir = this.uploadDir;
+
+				this.uploadDir = null;
+				this.handleUpload(Array.prototype.slice.call(this.fileInput.files || []), dir);
+			}
 		});
 
 		this.uploadStatus = E('span', { 'class': 'fb-upload-status' });
 
+		/* the "..." button next to the path bar: New Folder, Upload File. It doubles as the
+		 * "busy" switch: while an upload runs it is disabled */
 		this.uploadBtn = E('button', {
-			'class': 'cbi-button cbi-button-action fb-upload-btn',
+			'class': 'cbi-button fb-more-btn',   /* plain, like the two arrows: every theme paints those three alike */
+			'type': 'button',
+			'title': _('More actions'),
+			'aria-label': _('More actions'),
+			'aria-haspopup': 'menu',
 			'click': ev => {
 				ev.preventDefault();
-				this.fileInput.click();
+				ev.stopPropagation();
+				this.toggleToolMenu();
 			}
-		}, [ _('Upload') ]);
+		}, [ E('span', { 'class': 'fb-dots', 'aria-hidden': 'true' }) ]);
 
-		/* drop files anywhere on the list to upload them into the current directory */
+		/* drop files on a folder row to upload them into that folder, anywhere else into the current one */
 		const hasFiles = ev => !!(ev.dataTransfer && Array.prototype.indexOf.call(ev.dataTransfer.types || [], 'Files') !== -1);
+		const folderRowAt = ev => (ev.target && ev.target.closest) ? ev.target.closest('.fb-row[data-dropdir]') : null;
+
+		const clearDrop = () => {
+			this.listEl.classList.remove('is-drop');
+			Array.prototype.forEach.call(this.listEl.querySelectorAll('.is-drop-target'),
+				n => n.classList.remove('is-drop-target'));
+		};
 
 		this.listEl.addEventListener('dragover', ev => {
 			if (!hasFiles(ev))
 				return;
 
 			ev.preventDefault();
-			this.listEl.classList.add('is-drop');
+			clearDrop();
+
+			const row = folderRowAt(ev);
+
+			if (row)
+				row.classList.add('is-drop-target');
+			else
+				this.listEl.classList.add('is-drop');
 		});
-		this.listEl.addEventListener('dragleave', () => this.listEl.classList.remove('is-drop'));
+		this.listEl.addEventListener('dragleave', clearDrop);
 		this.listEl.addEventListener('drop', ev => {
 			if (!hasFiles(ev))
 				return;
 
 			ev.preventDefault();
-			this.listEl.classList.remove('is-drop');
-			this.handleUpload(Array.prototype.slice.call((ev.dataTransfer && ev.dataTransfer.files) || []), true);
+
+			const row = folderRowAt(ev);
+
+			clearDrop();
+			this.handleUpload(Array.prototype.slice.call((ev.dataTransfer && ev.dataTransfer.files) || []),
+				row ? row.getAttribute('data-dropdir') : null);
 		});
 
+		/* the menu goes away on any click elsewhere, Escape, another right-click outside the rows, scrolling or resizing */
+		document.addEventListener('click', () => this.closeMenu());
+		document.addEventListener('keydown', ev => {
+			if (ev.key === 'Escape')
+				this.closeMenu();
+		});
+		document.addEventListener('contextmenu', ev => {
+			if (this.menuEl && !(ev.target && ev.target.closest && ev.target.closest('.fb-row')))
+				this.closeMenu();
+		});
+		window.addEventListener('resize', () => this.closeMenu());
+		window.addEventListener('scroll', () => this.closeMenu(), true);
+
 		window.addEventListener('popstate', ev => {
+			if (ev.state && typeof ev.state.i === 'number')
+				this.histIdx = ev.state.i;
+
 			this.navigate((ev.state && ev.state.path) || '/', { history: false });
 		});
+
+		/* names for the numeric owner and group ids */
+		const readIds = file => fs.lines(file).then(lines => {
+			const map = {};
+
+			(lines || []).forEach(l => {
+				const f = String(l).split(':');
+
+				if (f.length >= 3 && f[0] && /^\d+$/.test(f[2]) && map[f[2]] == null)
+					map[f[2]] = f[0];
+			});
+
+			return map;
+		}).catch(() => ({}));
+
+		Promise.all([ readIds('/etc/passwd'), readIds('/etc/group') ]).then(r => {
+			this.idNames = { users: r[0], groups: r[1] };
+
+			if (this.cwd != null)
+				this.renderList();
+		});
+
+		/* the first crumb carries the name of this system instead of a bare "/" */
+		fs.trimmed('/proc/sys/kernel/hostname').then(name => {
+			if (!name)
+				return;
+
+			this.hostname = name;
+
+			if (this.cwd != null)
+				this.setPathBar(this.cwd);
+		}).catch(() => null);
 
 		const initial = new URLSearchParams(window.location.search).get('path') || '/';
 
@@ -280,11 +450,8 @@ return view.extend({
 			E('link', { 'rel': 'stylesheet', 'href': CSS_URL }),
 			E('h2', {}, [ _('File Manager') ]),
 			E('div', { 'class': 'cbi-section fb-container' }, [
-				E('div', { 'class': 'fb-pathbar' }, [ this.upBtn, this.pathInput ]),
-				E('div', { 'class': 'fb-panel' }, [
-					E('div', { 'class': 'fb-title' }, [ _('File List') ]),
-					E('div', { 'class': 'fb-tools' }, [ this.uploadStatus, this.uploadBtn, this.fileInput ])
-				]),
+				E('div', { 'class': 'fb-pathbar' }, [ this.backBtn, this.fwdBtn, this.pathWrap, this.uploadBtn, this.fileInput ]),
+				this.uploadStatus,
 				this.listEl,
 				E('div', { 'class': 'fb-warning' }, [
 					'\u26A0\uFE0F ' + _('Upload, delete and install act directly on the system. Please be careful.')
@@ -298,38 +465,197 @@ return view.extend({
 	navigate(target, opts) {
 		opts = opts || {};
 
+		const prev = this.cwd;
+
 		const path = normalizePath(target);
 
-		return this.readDir(path).then(entries => {
+		/*
+		 * The opened folders are remembered while moving around: going into a folder and back up (or
+		 * with the browser's back button) finds the tree as it was left. Only those below the new
+		 * current folder are read now, the others wait until it is shown again.
+		 */
+		const all = Object.keys(this.expanded);
+		const inside = p => (path === '/') ? (p !== '/') : (p.indexOf(path + '/') === 0);
+		const reopen = all.filter(inside);
+		const waiting = all.filter(p => !inside(p));
+
+		return this.loadDir(path).then(top =>
+			/* re-read the opened folders: the ones that are gone (deleted, renamed) simply close */
+			Promise.all(reopen.map(p => this.loadDir(p).then(d => [ p, d ], () => null)))
+				.then(subs => {
+					this.expanded = {};
+					this.subdirs = {};
+
+					waiting.forEach(p => { this.expanded[p] = true; });
+
+					subs.filter(Boolean).forEach(s => {
+						this.expanded[s[0]] = true;
+						this.subdirs[s[0]] = s[1];
+					});
+
+					return top;
+				})
+		).then(top => {
 			this.cwd = path;
-			this.entries = entries;
-			this.pathInput.value = path;
-			this.upBtn.disabled = (path === '/');
+			this.realCwd = top.real;
+			this.entries = top.entries;
+			this.setPathBar(path);
 			this.renderList();
 
 			if (opts.history !== false) {
 				const url = '?path=' + encodeURIComponent(path).replace(/%2F/g, '/');
 
 				try {
-					if (opts.history === 'replace')
-						window.history.replaceState({ path: path }, '', url);
-					else
-						window.history.pushState({ path: path }, '', url);
+					if (opts.history === 'replace') {
+						const st = window.history.state;
+
+						window.history.replaceState({ path: path, i: (st && typeof st.i === 'number') ? st.i : 0 }, '', url);
+						this.histIdx = (st && typeof st.i === 'number') ? st.i : 0;
+						this.histMax = this.histIdx;
+					}
+					else if (path !== prev) {
+						window.history.pushState({ path: path, i: this.histIdx + 1 }, '', url);
+						this.histIdx++;
+						this.histMax = this.histIdx;
+					}
 				}
 				catch (e) { /* ignore */ }
 			}
+
+			this.updateNav();
 		}).catch(err => {
 			showError(path + ': ' + errText(err));
 
 			if (this.cwd === null && path !== '/')
 				return this.navigate('/', { history: 'replace' });
 
-			this.pathInput.value = this.cwd || '/';
+			this.setPathBar(this.cwd || '/');
 		});
+	},
+
+	/* ----- path bar (clickable breadcrumb + typed path) ----- */
+
+	editPath(on) {
+		this.pathWrap.classList.toggle('is-editing', !!on);
+
+		if (on) {
+			this.pathInput.value = this.cwd || '/';
+			this.pathInput.focus();
+			this.pathInput.select();
+		}
+	},
+
+	updateNav() {
+		this.backBtn.disabled = !(this.histIdx > 0);
+		this.fwdBtn.disabled = !(this.histIdx < this.histMax);
+	},
+
+	setPathBar(path) {
+		const parts = path.split('/').filter(Boolean);
+		const items = [];
+		let acc = '';
+
+		this.pathInput.value = path;
+
+		const crumb = (label, target, last) => E('button', {
+			'type': 'button',
+			'class': 'fb-crumb' + (target === '/' ? ' is-root' : '') + (last ? ' is-current' : ''),
+			'data-path': target,
+			'title': target,
+			'aria-current': last ? 'location' : null,
+			'click': ev => {
+				ev.preventDefault();
+				if (!last)
+					this.navigate(target);
+			}
+		}, [ label ]);
+
+		items.push(crumb(this.hostname || '/', '/', parts.length === 0));
+
+		parts.forEach((name, i) => {
+			acc += '/' + name;
+			items.push(E('span', { 'class': 'fb-crumb-sep', 'aria-hidden': 'true' }, [ '\u203A' ]));
+			items.push(crumb(name, acc, i === parts.length - 1));
+		});
+
+		items.push(E('span', { 'class': 'fb-crumb-fill' }));
+
+		L.dom.content(this.crumbEl, items);
+
+		/* a deep path scrolls so that the current folder stays visible */
+		this.crumbEl.scrollLeft = this.crumbEl.scrollWidth;
 	},
 
 	reload() {
 		return this.navigate(this.cwd || '/', { history: false });
+	},
+
+	/* ----- protection of File Manager's own files ----- */
+
+	/* an entry, as shown and with the symlinks of its folder resolved */
+	entryPaths(e) {
+		return [ joinPath(e.dir, e.name), joinPath(e.realDir || e.dir, e.name) ];
+	},
+
+	/* part of File Manager, or a folder holding a part of it: no delete, no rename */
+	isProtected(e) {
+		return this.entryPaths(e).some(p => isOwnPath(p) || holdsOwnPath(p));
+	},
+
+	denyProtected(names) {
+		showError(_('Protected: %s belongs to File Manager itself (or holds its files) and cannot be deleted, renamed or overwritten here.')
+			.format(names.map(n => '"' + n + '"').join(', ')));
+	},
+
+	/* a folder's entries, each one knowing the folder it lives in (as shown and with links resolved) */
+	loadDir(path) {
+		return Promise.all([ this.readDir(path), realDir(path) ]).then(r => {
+			r[0].forEach(e => {
+				e.dir = path;
+				e.realDir = r[1];
+			});
+
+			return { entries: r[0], real: r[1] };
+		});
+	},
+
+	/* ----- tree view ----- */
+
+	toggleDir(e, keepFocus) {
+		const full = joinPath(e.dir, e.name);
+
+		/* the list is rebuilt, so a keyboard user gets the focus handed back to the same triangle */
+		const redraw = () => {
+			this.renderList();
+
+			if (!keepFocus)
+				return;
+
+			const t = Array.prototype.filter.call(this.listEl.querySelectorAll('.fb-twisty[data-path]'),
+				n => n.getAttribute('data-path') === full)[0];
+
+			if (t)
+				t.focus();
+		};
+
+		if (this.expanded[full]) {
+			/* closing a folder closes everything opened below it, too */
+			Object.keys(this.expanded).forEach(p => {
+				if (p === full || p.indexOf(full + '/') === 0) {
+					delete this.expanded[p];
+					delete this.subdirs[p];
+				}
+			});
+
+			redraw();
+			return Promise.resolve();
+		}
+
+		return this.loadDir(full).then(d => {
+			this.subdirs[full] = d;
+			this.expanded[full] = true;
+			redraw();
+		}).catch(err => showError(full + ': ' + errText(err)));
 	},
 
 	readDir(path) {
@@ -354,18 +680,27 @@ return view.extend({
 	sortDir: 1,
 	cols: null,
 	dragCol: null,
+	idNames: { users: {}, groups: {} },
 
 	getCols() {
 		if (this.cols)
 			return this.cols;
 
-		const def = [ 'name', 'kind', 'size', 'mtime', 'mode' ];
+		const def = [ 'name', 'kind', 'size', 'mtime', 'mode', 'owner' ];
 		let saved = null;
 
 		try { saved = JSON.parse(window.localStorage.getItem('fileman.cols')); } catch (e) { saved = null; }
 
-		this.cols = (Array.isArray(saved) && saved.length === def.length &&
-			def.every(k => saved.indexOf(k) !== -1) && saved[0] === 'name') ? saved : def;
+		/* the order the user dragged the columns into, with columns added later put at the end */
+		if (Array.isArray(saved) && saved[0] === 'name') {
+			const cols = saved.filter((k, i) => def.indexOf(k) !== -1 && saved.indexOf(k) === i);
+
+			def.forEach(k => { if (cols.indexOf(k) === -1) cols.push(k); });
+			this.cols = cols;
+		}
+		else {
+			this.cols = def;
+		}
 
 		return this.cols;
 	},
@@ -401,6 +736,17 @@ return view.extend({
 		this.renderList();
 	},
 
+	/* "root:root", like ls -l shows it; the number stays when /etc/passwd or /etc/group has no name for it */
+	ownerOf(e) {
+		if (e.uid == null && e.gid == null)
+			return '-';
+
+		const u = this.idNames.users[e.uid];
+		const g = this.idNames.groups[e.gid];
+
+		return (u != null ? u : e.uid) + ':' + (g != null ? g : e.gid);
+	},
+
 	kindOf(e) {
 		const isLink = e.type === 'symlink';
 
@@ -427,7 +773,8 @@ return view.extend({
 			kind: [ _('Kind'), 'fb-kind' ],
 			size: [ _('Size'), 'fb-size' ],
 			mtime: [ _('Modified'), 'fb-date' ],
-			mode: [ _('Permissions'), 'fb-perm' ]
+			mode: [ _('Permissions'), 'fb-perm' ],
+			owner: [ _('Owner/Group'), 'fb-owner' ]
 		};
 
 		const col = key => {
@@ -487,10 +834,8 @@ return view.extend({
 			this.getCols().map(col).concat([ E('div', { 'class': 'th fb-actions' }, [ _('Action') ]) ]));
 	},
 
-	renderList() {
-		const isDirEntry = e => e.type === 'directory' ||
-			(e.type === 'symlink' && e.targetType === 'directory');
-
+	/* sorts one level of the tree: opened folders keep their content right below them */
+	sortEntries(list) {
 		const key = this.sortKey;
 		const dir = this.sortDir;
 		const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
@@ -501,7 +846,7 @@ return view.extend({
 
 		const pinDirs = (key === 'name' || key === 'kind');
 
-		const sorted = this.entries.slice().sort((a, b) => {
+		return list.slice().sort((a, b) => {
 			if (pinDirs) {
 				const grp = isDirEntry(b) - isDirEntry(a);
 
@@ -519,17 +864,55 @@ return view.extend({
 				r = this.kindOf(a).localeCompare(this.kindOf(b));
 			else if (key === 'mode')
 				r = ((a.mode || 0) & 0o777) - ((b.mode || 0) & 0o777);
+			else if (key === 'owner')
+				r = this.ownerOf(a).localeCompare(this.ownerOf(b), undefined, { numeric: true });
 			else
 				r = byName(a, b);
 
 			return r ? r * dir : byName(a, b);
 		});
+	},
 
+	renderList() {
 		const rows = [ this.buildHead() ];
 
-		sorted.forEach((e, i) => rows.push(this.buildRow(e, i, isDirEntry(e))));
+		const walk = (list, depth) => {
+			this.sortEntries(list).forEach(e => {
+				rows.push(this.buildRow(e, rows.length, depth));
+
+				const full = joinPath(e.dir, e.name);
+
+				if (!this.expanded[full])
+					return;
+
+				const sub = this.subdirs[full];
+
+				if (sub && sub.entries.length)
+					walk(sub.entries, depth + 1);
+				else
+					rows.push(this.buildEmptyRow(rows.length, depth + 1));
+			});
+		};
+
+		if (this.entries.length)
+			walk(this.entries, 0);
+		else
+			rows.push(this.buildEmptyRow(rows.length, 0));
 
 		L.dom.content(this.listEl, E('div', { 'class': 'table cbi-section-table' }, rows));
+	},
+
+	/* a muted line under an opened folder that holds nothing */
+	buildEmptyRow(idx, depth) {
+		const nameCell = E('div', { 'class': 'td fb-name', 'style': '--fb-indent:' + (depth * 1.4) + 'rem' }, [
+			E('span', { 'class': 'fb-indent' }),
+			E('span', { 'class': 'fb-twisty is-blank' }),
+			E('span', { 'class': 'fb-emptytext' }, [ _('(empty)') ])
+		]);
+
+		return E('div', { 'class': 'tr fb-row fb-empty cbi-rowstyle-' + (1 + idx % 2) + (depth > 0 ? ' is-nested' : '') },
+			this.getCols().map(k => k === 'name' ? nameCell : E('div', { 'class': 'td' }))
+				.concat([ E('div', { 'class': 'td fb-actions' }) ]));
 	},
 
 	handleDownload(full, name) {
@@ -549,15 +932,19 @@ return view.extend({
 		]);
 	},
 
-	buildRow(e, idx, isDir) {
-		const full = joinPath(this.cwd, e.name);
+	buildRow(e, idx, depth) {
+		const isDir = isDirEntry(e);
+		const full = joinPath(e.dir, e.name);
 		const isLink = e.type === 'symlink';
 		const isFile = e.type === 'file' || (isLink && e.targetType === 'file');
 		const icon = isLink ? 'is-link' : (isDir ? 'is-dir' : (isFile && this.installerFor(e.name) ? 'is-pkg' : 'is-file'));
 		const label = (isLink && e.target) ? e.name + ' -> ' + e.target : e.name;
 		const clickable = isDir || isFile;
 
-		const nameAttrs = { 'class': 'td fb-name' + (clickable ? ' is-clickable' : '') };
+		const nameAttrs = {
+			'class': 'td fb-name' + (clickable ? ' is-clickable' : ''),
+			'style': '--fb-indent:' + (depth * 1.4) + 'rem'
+		};
 
 		if (clickable) {
 			nameAttrs.click = () => {
@@ -571,33 +958,75 @@ return view.extend({
 		const nameEl = E('strong', {});
 		nameEl.textContent = label;
 
-		const actions = [
-			E('button', {
-				'class': 'cbi-button cbi-button-edit',
-				'click': ev => {
-					ev.preventDefault();
-					this.handleRename(e);
-				}
-			}, [ _('Rename') ]),
-			' ',
-			E('button', {
-				'class': 'cbi-button cbi-button-remove',
-				'click': ev => {
-					ev.preventDefault();
-					this.handleDelete(e);
-				}
-			}, [ _('Delete') ])
-		];
+		/* the triangle opens and closes a folder in place; clicking its name still enters it */
+		const open = !!this.expanded[full];
 
-		if (isFile && this.installerFor(e.name)) {
-			actions.push(' ', E('button', {
-				'class': 'cbi-button cbi-button-action',
+		const twisty = isDir
+			? E('span', {
+				'class': 'fb-twisty' + (open ? ' is-open' : ''),
+				'role': 'button',
+				'tabindex': '0',
+				'aria-expanded': open ? 'true' : 'false',
+				'data-path': full,
+				'title': open ? _('Collapse') : _('Expand'),
+				'click': ev => {
+					ev.stopPropagation();
+					this.toggleDir(e);
+				},
+				'keydown': ev => {
+					if (ev.key === 'Enter' || ev.key === ' ') {
+						ev.preventDefault();
+						ev.stopPropagation();
+						this.toggleDir(e, true);
+					}
+				}
+			})
+			: E('span', { 'class': 'fb-twisty is-blank' });
+
+		const locked = this.isProtected(e);
+		const lockAttrs = locked
+			? { 'disabled': 'disabled', 'title': _('Protected: File Manager needs this to run') }
+			: {};
+
+		/* what can be done with this entry: the Action column and the right-click menu both use this */
+		const ops = {
+			rename: { label: _('Rename'), btn: 'cbi-button-edit', locked: locked, run: () => this.handleRename(e) },
+			delete: { label: _('Delete'), btn: 'cbi-button-remove', locked: locked, run: () => this.handleDelete(e) },
+			install: (isFile && this.installerFor(e.name))
+				? { label: _('Install'), btn: 'cbi-button-action', locked: false, run: () => this.handleInstall(e) }
+				: null,
+
+			/* menu only: pick files for this folder */
+			upload: isDir
+				? { label: _('Upload'), locked: false, run: () => {
+					if (this.uploadBtn.disabled)
+						return;
+
+					this.uploadDir = full;
+					this.fileInput.click();
+				} }
+				: null
+		};
+
+		const actions = [];
+
+		[ 'rename', 'delete', 'install' ].forEach(k => {
+			const o = ops[k];
+
+			if (!o)
+				return;
+
+			if (actions.length)
+				actions.push(' ');
+
+			actions.push(E('button', Object.assign({
+				'class': 'cbi-button ' + o.btn,
 				'click': ev => {
 					ev.preventDefault();
-					this.handleInstall(e);
+					o.run();
 				}
-			}, [ _('Install') ]));
-		}
+			}, o.locked ? lockAttrs : {}), [ o.label ]));
+		});
 
 		const dateEl = E('div', { 'class': 'td fb-date' });
 		dateEl.textContent = formatDate(e.mtime);
@@ -615,16 +1044,191 @@ return view.extend({
 		const permEl = E('div', { 'class': 'td fb-perm' });
 		permEl.textContent = modeString(e.type, e.mode);
 
+		const ownerEl = E('div', { 'class': 'td fb-owner' });
+		ownerEl.textContent = this.ownerOf(e);
+
 		const cells = {
-			name: E('div', nameAttrs, [ E('span', { 'class': 'fb-entry ' + icon }, [ nameEl ]), subEl ]),
+			name: E('div', nameAttrs, [
+				E('span', { 'class': 'fb-indent' }),
+				twisty,
+				E('span', { 'class': 'fb-entry ' + icon }, [ nameEl ]),
+				subEl
+			]),
 			kind: kindEl,
 			size: sizeEl,
 			mtime: dateEl,
-			mode: permEl
+			mode: permEl,
+			owner: ownerEl
 		};
 
-		return E('div', { 'class': 'tr fb-row cbi-rowstyle-' + (1 + idx % 2) },
-			this.getCols().map(k => cells[k]).concat([ E('div', { 'class': 'td fb-actions' }, actions) ]));
+		const row = E('div', {
+			'class': 'tr fb-row cbi-rowstyle-' + (1 + idx % 2) + (depth > 0 ? ' is-nested' : ''),
+			'data-dropdir': isDir ? full : null,
+			'tabindex': '0',
+			'contextmenu': ev => this.openMenu(ev, row, ops)
+		}, this.getCols().map(k => cells[k]).concat([ E('div', { 'class': 'td fb-actions' }, actions) ]));
+
+		return row;
+	},
+
+	/* ----- right-click menu (or the menu key): Install or Upload, Rename, Delete ----- */
+
+	closeMenu() {
+		if (this.menuEl && this.menuEl.parentNode)
+			this.menuEl.parentNode.removeChild(this.menuEl);
+
+		if (this.menuRow)
+			this.menuRow.classList.remove('is-menu-target');
+
+		if (this.uploadBtn)
+			this.uploadBtn.classList.remove('is-open');
+
+		this.menuEl = null;
+		this.menuRow = null;
+	},
+
+	menuItem(o, extra) {
+		return E('button', {
+			'class': 'fb-menu-item' + (extra || ''),
+			'type': 'button',
+			'role': 'menuitem',
+			'disabled': o.locked ? 'disabled' : null,
+			'title': o.locked ? _('Protected: File Manager needs this to run') : null,
+			'click': ev2 => {
+				ev2.stopPropagation();
+				this.closeMenu();
+				o.run();
+			}
+		}, [ o.label ]);
+	},
+
+	/* opts: items, themeNode (colours come from it), x / y or anchorRight, restore (focus back), row (highlighted) */
+	showMenu(opts) {
+		this.closeMenu();
+
+		const menu = E('div', {
+			'class': 'fb-menu',
+			'role': 'menu',
+			'keydown': ev2 => {
+				const btns = Array.prototype.filter.call(menu.querySelectorAll('.fb-menu-item'), b => !b.disabled);
+				const i = btns.indexOf(document.activeElement);
+
+				if (ev2.key === 'ArrowDown' || ev2.key === 'ArrowUp') {
+					ev2.preventDefault();
+
+					if (btns.length)
+						btns[(i + (ev2.key === 'ArrowDown' ? 1 : -1) + btns.length) % btns.length].focus();
+				}
+				else if (ev2.key === 'Escape' || ev2.key === 'Tab') {
+					ev2.preventDefault();
+					this.closeMenu();
+					opts.restore();
+				}
+			}
+		}, opts.items);
+
+		/* take the colours of the theme in use: first opaque background up the tree, and the node's text colour */
+		const opaque = c => {
+			const m = /^rgba?\(([^)]*)\)$/.exec(c || '');
+			const parts = m ? m[1].split(/[\s,\/]+/).filter(Boolean) : [];
+
+			return !!m && (parts.length < 4 || parseFloat(parts[3]) >= 0.95);
+		};
+
+		let bg = '#fff';
+
+		for (let n = opts.themeNode; n && n.nodeType === 1; n = n.parentNode) {
+			const c = window.getComputedStyle(n).backgroundColor;
+
+			if (opaque(c)) {
+				bg = c;
+				break;
+			}
+		}
+
+		menu.style.background = bg;
+		menu.style.color = window.getComputedStyle(opts.themeNode).color;
+
+		document.body.appendChild(menu);
+
+		let x = opts.x;
+
+		if (opts.anchorRight != null)
+			x = opts.anchorRight - menu.offsetWidth;
+
+		menu.style.left = Math.max(4, Math.min(x, window.innerWidth - menu.offsetWidth - 4)) + 'px';
+		menu.style.top = Math.max(4, Math.min(opts.y, window.innerHeight - menu.offsetHeight - 4)) + 'px';
+
+		if (opts.row)
+			opts.row.classList.add('is-menu-target');
+
+		this.menuEl = menu;
+		this.menuRow = opts.row || null;
+
+		const first = menu.querySelector('.fb-menu-item:not([disabled])');
+
+		if (first)
+			first.focus();
+	},
+
+	openMenu(ev, row, ops) {
+		ev.preventDefault();
+
+		const items = [];
+
+		if (ops.install)
+			items.push(this.menuItem(ops.install));
+
+		if (ops.upload)
+			items.push(this.menuItem(ops.upload));
+
+		items.push(this.menuItem(ops.rename));
+		items.push(E('div', { 'class': 'fb-menu-sep', 'role': 'separator' }));
+		items.push(this.menuItem(ops.delete, ' is-danger'));
+
+		/* a menu key press has no pointer position: open it under the row instead */
+		let x = ev.clientX;
+		let y = ev.clientY;
+
+		if (!x && !y) {
+			const r = row.getBoundingClientRect();
+
+			x = r.left + 24;
+			y = r.bottom;
+		}
+
+		this.showMenu({ items: items, themeNode: row, x: x, y: y, row: row, restore: () => row.focus() });
+	},
+
+	/* the "..." button: New Folder, Upload File */
+	toggleToolMenu() {
+		const wasOpen = !!this.menuEl && this.menuEl.classList.contains('is-tools');
+
+		this.closeMenu();
+
+		if (wasOpen || this.uploadBtn.disabled)
+			return;
+
+		const r = this.uploadBtn.getBoundingClientRect();
+
+		this.showMenu({
+			items: [
+				this.menuItem({ label: _('New Folder'), run: () => this.handleNewFolder() }),
+				this.menuItem({ label: _('Upload File'), run: () => {
+					if (this.uploadBtn.disabled)
+						return;
+					this.uploadDir = null;
+					this.fileInput.click();
+				} })
+			],
+			themeNode: this.uploadBtn.parentNode,
+			anchorRight: r.right,
+			y: r.bottom + 4,
+			restore: () => this.uploadBtn.focus()
+		});
+
+		this.menuEl.classList.add('is-tools');
+		this.uploadBtn.classList.add('is-open');
 	},
 
 	/* ----- package installation ----- */
@@ -645,7 +1249,7 @@ return view.extend({
 	},
 
 	handleInstall(e) {
-		const full = joinPath(this.cwd, e.name);
+		const full = joinPath(e.dir, e.name);
 		const inst = this.installerFor(e.name);
 
 		if (!inst) {
@@ -709,7 +1313,10 @@ return view.extend({
 	/* ----- delete / rename ----- */
 
 	handleDelete(e) {
-		const full = joinPath(this.cwd, e.name);
+		if (this.isProtected(e))
+			return this.denyProtected([ e.name ]);
+
+		const full = joinPath(e.dir, e.name);
 		const isDir = e.type === 'directory';
 
 		ui.showModal(_('Delete'), [
@@ -739,6 +1346,9 @@ return view.extend({
 	},
 
 	handleRename(e) {
+		if (this.isProtected(e))
+			return this.denyProtected([ e.name ]);
+
 		const input = E('input', {
 			'type': 'text',
 			'class': 'cbi-input-text',
@@ -786,8 +1396,8 @@ return view.extend({
 			return Promise.resolve();
 		}
 
-		const from = joinPath(this.cwd, e.name);
-		const to = joinPath(this.cwd, newName);
+		const from = joinPath(e.dir, e.name);
+		const to = joinPath(e.dir, newName);
 
 		return fs.stat(to)
 			.then(() => { throw new Error(_('"%s" already exists').format(newName)); }, () => null)
@@ -797,43 +1407,127 @@ return view.extend({
 			.then(() => this.reload());
 	},
 
+	/* ----- new folder ----- */
+
+	handleNewFolder() {
+		const input = E('input', {
+			'type': 'text',
+			'class': 'cbi-input-text',
+			'style': 'width:100%',
+			'keydown': ev => {
+				if (ev.key === 'Enter') {
+					ev.preventDefault();
+					ok.click();
+				}
+			}
+		});
+
+		const ok = E('button', {
+			'class': 'btn cbi-button cbi-button-positive important',
+			'click': () => this.doNewFolder(input.value)
+		}, [ _('Create') ]);
+
+		ui.showModal(_('New Folder'), [
+			E('p', {}, [ _('Create a folder in %s. Please enter its name.').format(this.cwd) ]),
+			input,
+			E('div', { 'class': 'right' }, [
+				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
+				' ',
+				ok
+			])
+		]);
+
+		input.focus();
+	},
+
+	doNewFolder(name) {
+		name = String(name || '').trim();
+		ui.hideModal();
+
+		if (!name)
+			return Promise.resolve();
+
+		if (name === '.' || name === '..' || name.indexOf('/') !== -1) {
+			showError(_('Invalid file name'));
+			return Promise.resolve();
+		}
+
+		const dir = this.cwd;
+		const full = joinPath(dir, name);
+
+		return fs.stat(full)
+			.then(() => { throw new Error(_('"%s" already exists').format(name)); }, () => null)
+			.then(() => fs.exec('/bin/mkdir', [ full ]))
+			.then(checkExec)
+			.catch(err => showError(errText(err)))
+			.then(() => this.reload());
+	},
+
 	/* ----- upload ----- */
 
-	handleUpload(files, confirm) {
+	/* dir: where the files go. The current folder unless they were dropped on a folder row */
+	handleUpload(files, dir) {
 		if (!files || !files.length || this.uploadBtn.disabled)
 			return Promise.resolve();
 
+		dir = dir || this.cwd;
+
+		/* what the target folder already holds, to spot files that would be overwritten */
+		const listing = (dir === this.cwd)
+			? Promise.resolve(this.entries)
+			: (this.subdirs[dir] ? Promise.resolve(this.subdirs[dir].entries) : this.loadDir(dir).then(d => d.entries));
+
+		return listing
+			.then(entries => this.confirmUpload(files, dir, entries))
+			.catch(err => showError(dir + ': ' + errText(err)));
+	},
+
+	confirmUpload(files, dir, entries) {
 		const existing = files
-			.filter(f => this.entries.some(e => e.name === f.name))
+			.filter(f => entries.some(e => e.name === f.name))
 			.map(f => f.name);
 
-		/* files picked with the Upload button were chosen on purpose; dropped files always ask first */
-		if (!existing.length && !confirm)
-			return this.uploadFiles(files);
+		/* never overwrite File Manager's own files (a missing one may still be put back) */
+		const locked = entries
+			.filter(e => existing.indexOf(e.name) !== -1 && this.entryPaths(e).some(isOwnPath))
+			.map(e => e.name);
 
+		if (locked.length) {
+			this.fileInput.value = '';
+			this.denyProtected(locked);
+			return;
+		}
+
+		/* picked or dropped, uploads always ask for a final confirmation */
 		const names = files.map(f => f.name).join(', ');
 
 		ui.showModal(_('Upload'), [
 			E('p', {}, [ existing.length
-				? _('Overwrite existing file(s): %s ?').format(existing.join(', '))
-				: _('Do u want to upload %s to %s ?').format(names, this.cwd) ]),
+				? _('Overwrite existing file(s) in %s: %s ?').format(dir, existing.join(', '))
+				: _('Do u want to upload %s to %s ?').format(names, dir) ]),
 			E('div', { 'class': 'right' }, [
-				E('button', { 'class': 'btn cbi-button', 'click': ui.hideModal }, [ _('Cancel') ]),
+				E('button', {
+					'class': 'btn cbi-button',
+					'click': () => {
+						/* forget the pick, so choosing the same file again fires "change" again */
+						this.fileInput.value = '';
+						ui.hideModal();
+					}
+				}, [ _('Cancel') ]),
 				' ',
 				E('button', {
 					'class': 'btn cbi-button cbi-button-positive important',
-					'click': () => this.uploadFiles(files)
+					'click': () => this.uploadFiles(files, dir)
 				}, [ _('Upload') ])
 			])
 		]);
-
-		return Promise.resolve();
 	},
 
-	uploadFiles(files) {
+	uploadFiles(files, dir) {
 		ui.hideModal();
 
-		const dir = this.cwd;
+		dir = dir || this.cwd;
+
 		let chain = Promise.resolve();
 
 		this.uploadBtn.disabled = true;
@@ -853,6 +1547,10 @@ return view.extend({
 			this.fileInput.disabled = false;
 			this.uploadBtn.disabled = false;
 			this.uploadStatus.textContent = '';
+
+			/* files dropped on a folder: open it, so the result is visible */
+			if (dir !== this.cwd)
+				this.expanded[dir] = true;
 
 			return this.reload();
 		});
