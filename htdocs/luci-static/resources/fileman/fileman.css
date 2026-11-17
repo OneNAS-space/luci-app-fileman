@@ -51,7 +51,7 @@
     min-width: 0;
     margin: 0;
     box-sizing: border-box;
-    font-family: Consolas, Monaco, monospace;
+    font-family: inherit;
 }
 .fb-container .fb-pathwrap.is-editing .fb-path { display: block; }
 .fb-container .fb-pathwrap.is-editing .fb-crumbs { display: none; }
@@ -71,7 +71,6 @@
     scrollbar-width: none;
     white-space: nowrap;
     cursor: text;
-    font-family: Consolas, Monaco, monospace;
 }
 .fb-container .fb-crumbs::-webkit-scrollbar { display: none; }
 .fb-container .fb-crumb {
@@ -88,8 +87,16 @@
 .fb-container .fb-crumb:hover,
 .fb-container .fb-crumb:focus-visible { background: rgba(128, 128, 128, .22); }
 /* the path bar only ever holds folders: the folder icon of the list, and a router for the system itself */
-.fb-container .fb-crumb::before { content: "\1F4C1"; margin-right: .4em; }
-.fb-container .fb-crumb.is-root::before { content: "\1F6DC"; }
+.fb-container .fb-crumb { display: inline-flex; align-items: center; }
+.fb-container .fb-crumb::before {
+    content: "";
+    flex: none;
+    width: 1.45em;
+    height: 1.2em;
+    margin-right: .4em;
+    background: var(--fb-ico-dir) center / contain no-repeat;
+}
+.fb-container .fb-crumb.is-root::before { width: 1.9em; height: 1.3em; background-image: var(--fb-ico-host); }
 .fb-container .fb-crumb.is-current { font-weight: bold; cursor: default; }
 .fb-container .fb-crumb.is-current:hover { background: transparent; }
 .fb-container .fb-crumb-sep { flex: none; opacity: .5; }
@@ -182,7 +189,7 @@
 /* the values are set in the monospace look of ls -l, the headers stay like all the others */
 .fb-container .td.fb-perm,
 .fb-container .td.fb-owner {
-    font-family: Consolas, Monaco, monospace;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
     font-size: .9em;
     opacity: .75;
 }
@@ -263,19 +270,27 @@
     margin-left: 2.5rem;
 }
 
-/* entry icons are plain emoji, no image files */
+/* entry icons: small inline SVGs in the style of the macOS folder and document icons, no image files */
+.fb-container {
+    --fb-ico-dir:  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 52'%3E%3Cdefs%3E%3ClinearGradient id='b' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%2358B0FA'/%3E%3Cstop offset='1' stop-color='%232B82EA'/%3E%3C/linearGradient%3E%3ClinearGradient id='f' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%239ADCFF'/%3E%3Cstop offset='1' stop-color='%234DAFF8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M6 9a6 6 0 0 1 6-6h13.5c1.9 0 3.6.8 4.8 2.2L34 9h18a6 6 0 0 1 6 6v29a6 6 0 0 1-6 6H12a6 6 0 0 1-6-6z' fill='url(%23b)'/%3E%3Cpath d='M4 21a6 6 0 0 1 6-6h44a6 6 0 0 1 6 6v23a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6z' fill='url(%23f)'/%3E%3Cpath d='M10.5 15.75h43a5.25 5.25 0 0 1 5.25 5.25' fill='none' stroke='white' stroke-opacity='.55' stroke-width='1.5'/%3E%3C/svg%3E");
+    --fb-ico-file: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='2 1 44 58'%3E%3Cdefs%3E%3ClinearGradient id='p' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23FFFFFF'/%3E%3Cstop offset='1' stop-color='%23E9ECF1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M9 3h22l13 13v36a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8a5 5 0 0 1 5-5z' fill='url(%23p)' stroke='%23A9B1BD' stroke-width='1.5'/%3E%3Cpath d='M31 3v8a5 5 0 0 0 5 5h8z' fill='%23CBD1DA' stroke='%23A9B1BD' stroke-width='1.5' stroke-linejoin='round'/%3E%3Crect x='11' y='28' width='26' height='3' rx='1.5' fill='%23BEC5CF'/%3E%3Crect x='11' y='35' width='26' height='3' rx='1.5' fill='%23BEC5CF'/%3E%3Crect x='11' y='42' width='17' height='3' rx='1.5' fill='%23BEC5CF'/%3E%3C/svg%3E");
+    --fb-ico-link: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='2 1 44 58'%3E%3Cdefs%3E%3ClinearGradient id='p' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23FFFFFF'/%3E%3Cstop offset='1' stop-color='%23E9ECF1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M9 3h22l13 13v36a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8a5 5 0 0 1 5-5z' fill='url(%23p)' stroke='%23A9B1BD' stroke-width='1.5'/%3E%3Cpath d='M31 3v8a5 5 0 0 0 5 5h8z' fill='%23CBD1DA' stroke='%23A9B1BD' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cdefs%3E%3ClinearGradient id='c' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%235BB0FF'/%3E%3Cstop offset='1' stop-color='%231F7AE8'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='32' cy='43' r='12' fill='url(%23c)' stroke='white' stroke-width='2'/%3E%3Cpath d='M27 48l9-9M30 39h6v6' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    --fb-ico-pkg:  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='4 4 48 54'%3E%3Cpath d='M28 6L50 17.5V43L28 54.5L6 43V17.5z' fill='%23C0904F'/%3E%3Cpath d='M6 17.5L28 29v25.5L6 43z' fill='%23D2A265'/%3E%3Cpath d='M50 17.5L28 29v25.5L50 43z' fill='%23B38145'/%3E%3Cpath d='M28 6L50 17.5L28 29L6 17.5z' fill='%23E6C48E'/%3E%3Cpath d='M17 11.8L39 23.3L33 26.3L11 14.8z' fill='%23F4E3BE' fill-opacity='.9'/%3E%3Cpath d='M28 29v25.5' stroke='%239A6E38' stroke-opacity='.45' stroke-width='1'/%3E%3C/svg%3E");
+    --fb-ico-host: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='1 3 62 40'%3E%3Cdefs%3E%3ClinearGradient id='r' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23F7F8FA'/%3E%3Cstop offset='1' stop-color='%23BCC2CC'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M15 21L10 5M49 21L54 5' stroke='%236E7681' stroke-width='3.5' stroke-linecap='round'/%3E%3Crect x='3.5' y='19.5' width='57' height='21' rx='8' fill='url(%23r)' stroke='%238E96A3' stroke-width='1.5'/%3E%3Ccircle cx='17' cy='30' r='2.6' fill='%2334C759'/%3E%3Ccircle cx='26' cy='30' r='2.6' fill='%2334C759'/%3E%3Ccircle cx='35' cy='30' r='2.6' fill='%239FA6B2'/%3E%3Crect x='44' y='28.2' width='11' height='3.6' rx='1.8' fill='%23B9BEC8'/%3E%3C/svg%3E");
+}
 .fb-container .fb-entry:before {
+    content: "";
     display: inline-block;
     width: 1.6em;
+    height: 1.6em;
     margin: 0 .4rem 0 .5rem;
-    text-align: center;
-    font-style: normal;
     vertical-align: middle;
+    background: center / contain no-repeat;
 }
-.fb-container .is-dir:before  { content: "\1F4C1"; }
-.fb-container .is-file:before { content: "\1F4C4"; }
-.fb-container .is-link:before { content: "\1F517"; }
-.fb-container .is-pkg:before  { content: "\1F4E6"; }
+.fb-container .is-dir:before  { background-image: var(--fb-ico-dir); }
+.fb-container .is-file:before { background-image: var(--fb-ico-file); }
+.fb-container .is-link:before { background-image: var(--fb-ico-link); }
+.fb-container .is-pkg:before  { background-image: var(--fb-ico-pkg); }
 
 .fb-container .fb-sub {
     display: none;
