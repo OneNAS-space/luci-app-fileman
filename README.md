@@ -33,7 +33,7 @@ no translations shipped (strings are wrapped in `_()` if you want to add your ow
   hold them, cannot be deleted, renamed or overwritten here (symlinks into them included), so one click cannot break the page.
   This is a safety net for the interface, not a security boundary: the access rules still grant write access to the
   whole file system.
-- Emoji icons instead of image files, symlinks show their target, responsive layout that follows the real content width
+- macOS-style SVG icons (folder, document, alias, package, router) drawn in the stylesheet, no image files; symlinks show their target, responsive layout that follows the real content width
   (works with sidebar themes such as Argon and Bootstrap): less important columns drop out as the page gets narrower,
   no horizontal scrolling.
 
